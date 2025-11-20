@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { generateAnalysisReport, generateCombinedAnalysisReport } from "./pdfGenerator";
 
-const BACKEND_URL = "http://127.0.0.1:5000//predict";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000/predict";
 
 function App() {
   const [items, setItems] = useState([]); // {id, file, url, type, status, result, error}

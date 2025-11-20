@@ -1,14 +1,19 @@
 import io
 import base64
+import os
 import numpy as np
 from PIL import Image
 import cv2
+from dotenv import load_dotenv
 
 import tensorflow as tf
 from tensorflow import keras
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+# Load environment variables from .env file
+load_dotenv()
 
 from tensorflow.keras.applications.resnet50 import preprocess_input
 
@@ -28,12 +33,23 @@ CLASS_NAMES = [
     'scratches'
 ]
 
-MODEL_PATH = 'neu_defect_resnet50.h5'  # Path to your trained Keras model
+MODEL_PATH = os.getenv('MODEL_PATH', 'neu_defect_resnet50.h5')  # Path to your trained Keras model
 LAST_CONV_LAYER_NAME = 'conv5_block3_out'  # kept for clarity, not directly used
 
 # -------------------- FLASK APP -------------------- #
 app = Flask(__name__)
-CORS(app)
+
+# CORS Configuration from environment
+cors_origins = os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173')
+cors_origins_list = [origin.strip() for origin in cors_origins.split(',')]
+
+CORS(app, resources={
+    r"/predict": {
+        "origins": cors_origins_list,
+        "methods": ["POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # Global model variables
 model = None
@@ -167,7 +183,20 @@ def superimpose_gradcam(original_img, heatmap, alpha=0.4):
 # -------------------- ROUTES -------------------- #
 @app.route("/")
 def home():
-    return "Flask app is running! Model loading status: " + ("Loaded" if model else "Not Loaded")
+    return jsonify({
+        "status": "running",
+        "message": "Industrial Defect Detection API",
+        "model_loaded": model is not None
+    }), 200
+
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint for deployment platforms"""
+    return jsonify({
+        "status": "healthy",
+        "model_loaded": model is not None
+    }), 200
 
 
 @app.route("/predict", methods=["POST"])
@@ -235,5 +264,9 @@ with app.app_context():
     load_model()
 
 if __name__ == "__main__":
-    # Development server; for production use gunicorn/uwsgi, etc.
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Get configuration from environment variables
+    port = int(os.getenv('PORT', 5000))
+    host = os.getenv('HOST', '0.0.0.0')
+    debug = os.getenv('FLASK_ENV', 'development') == 'development'
+    
+    app.run(host=host, port=port, debug=debug)

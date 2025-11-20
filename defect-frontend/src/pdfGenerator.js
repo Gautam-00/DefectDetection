@@ -1,0 +1,421 @@
+import jsPDF from 'jspdf';
+
+export const generateAnalysisReport = async (item) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 15;
+  const contentWidth = pageWidth - 2 * margin;
+  let yPosition = margin;
+
+  // ===== HEADER =====
+  doc.setFillColor(41, 128, 185); // Professional blue
+  doc.rect(0, 0, pageWidth, 35, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(24);
+  doc.setFont(undefined, 'bold');
+  doc.text('Defect Analysis Report', pageWidth / 2, 20, { align: 'center' });
+
+  yPosition = 45;
+
+  // ===== METADATA SECTION =====
+  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(11);
+  doc.setFont(undefined, 'bold');
+  doc.text('Analysis Details', margin, yPosition);
+
+  yPosition += 8;
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(10);
+
+  const analysisDate = new Date().toLocaleString();
+  const metadata = [
+    { label: 'File Name', value: item.name },
+    { label: 'Analysis Date', value: analysisDate },
+    { label: 'Predicted Class', value: item.result.predicted_class },
+  ];
+
+  metadata.forEach((meta) => {
+    doc.setFont(undefined, 'bold');
+    doc.text(`${meta.label}:`, margin, yPosition);
+    doc.setFont(undefined, 'normal');
+    doc.text(meta.value, margin + 50, yPosition);
+    yPosition += 7;
+  });
+
+  yPosition += 5;
+
+  // ===== PROBABILITIES SECTION =====
+  if (item.result.probabilities) {
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Classification Probabilities', margin, yPosition);
+    yPosition += 10;
+
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(9);
+
+    const probabilities = Object.entries(item.result.probabilities)
+      .sort((a, b) => b[1] - a[1]);
+
+    probabilities.forEach(([className, probability]) => {
+      const barLength = (probability * 40); // scale to ~40mm
+      const percentage = (probability * 100).toFixed(2);
+
+      // Class name
+      doc.text(`${className}:`, margin, yPosition);
+
+      // Bar background
+      doc.setDrawColor(200, 200, 200);
+      doc.rect(margin + 35, yPosition - 3, 40, 4);
+
+      // Probability bar
+      doc.setFillColor(41, 128, 185);
+      doc.rect(margin + 35, yPosition - 3, barLength, 4, 'F');
+
+      // Percentage text
+      doc.text(`${percentage}%`, margin + 80, yPosition);
+
+      yPosition += 7;
+    });
+
+    yPosition += 5;
+  }
+
+  // ===== IMAGE SECTION =====
+  if (item.file && item.type.startsWith('image/')) {
+    // Check if we need a new page
+    if (yPosition + 70 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Original Image', margin, yPosition);
+    yPosition += 8;
+
+    try {
+      const imageData = await fileToDataURL(item.file);
+      const imgWidth = contentWidth;
+      const imgHeight = (imgWidth * 3) / 4; // Maintain aspect ratio (4:3)
+
+      if (yPosition + imgHeight > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      doc.addImage(imageData, 'JPEG', margin, yPosition, imgWidth, imgHeight);
+      yPosition += imgHeight + 10;
+    } catch (err) {
+      console.error('Error adding original image:', err);
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(200, 0, 0);
+      doc.text('Original image preview unavailable', margin, yPosition);
+      yPosition += 10;
+    }
+  }
+
+  // ===== GRAD-CAM HEATMAP SECTION =====
+  if (item.result.grad_cam_image_base64) {
+    // Check if we need a new page
+    if (yPosition + 70 > pageHeight - margin) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(11);
+    doc.text('Grad-CAM Heatmap (Defect Localization)', margin, yPosition);
+    yPosition += 8;
+
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(
+      'This visualization highlights the regions that contributed most to the defect prediction.',
+      margin,
+      yPosition
+    );
+    yPosition += 6;
+
+    try {
+      const heatmapData = `data:image/png;base64,${item.result.grad_cam_image_base64}`;
+      const imgWidth = contentWidth;
+      const imgHeight = (imgWidth * 3) / 4;
+
+      if (yPosition + imgHeight > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      doc.addImage(heatmapData, 'PNG', margin, yPosition, imgWidth, imgHeight);
+      yPosition += imgHeight + 10;
+    } catch (err) {
+      doc.setTextColor(200, 0, 0);
+      doc.text('Heatmap unavailable', margin, yPosition);
+      yPosition += 10;
+    }
+  }
+
+  // ===== FOOTER =====
+  const footerY = pageHeight - 10;
+  doc.setFontSize(8);
+  doc.setTextColor(150, 150, 150);
+  doc.text('Generated by Industrial Defect Detector', pageWidth / 2, footerY, {
+    align: 'center',
+  });
+
+  // Add page numbers
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 5, {
+      align: 'center',
+    });
+  }
+
+  // Save the PDF
+  const filename = `Defect_Analysis_${Date.now()}.pdf`;
+  doc.save(filename);
+};
+
+// Helper function to convert File object to data URL
+const fileToDataURL = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
+export const generateCombinedAnalysisReport = async (items) => {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 15;
+  const contentWidth = pageWidth - 2 * margin;
+  let yPosition = margin;
+  let isFirstPage = true;
+
+  // ===== MAIN HEADER =====
+  doc.setFillColor(41, 128, 185); // Professional blue
+  doc.rect(0, 0, pageWidth, 35, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(24);
+  doc.setFont(undefined, 'bold');
+  doc.text('Batch Defect Analysis Report', pageWidth / 2, 20, { align: 'center' });
+
+  yPosition = 45;
+
+  // ===== SUMMARY SECTION =====
+  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(11);
+  doc.setFont(undefined, 'bold');
+  doc.text('Batch Summary', margin, yPosition);
+
+  yPosition += 8;
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(10);
+
+  const analysisDate = new Date().toLocaleString();
+  const completedItems = items.filter(item => item.status === 'done');
+  
+  const summaryData = [
+    { label: 'Total Images Analyzed', value: completedItems.length },
+    { label: 'Analysis Date', value: analysisDate },
+  ];
+
+  summaryData.forEach((data) => {
+    doc.setFont(undefined, 'bold');
+    doc.text(`${data.label}:`, margin, yPosition);
+    doc.setFont(undefined, 'normal');
+    doc.text(String(data.value), margin + 50, yPosition);
+    yPosition += 7;
+  });
+
+  yPosition += 10;
+
+  // ===== ADD EACH ITEM'S ANALYSIS =====
+  for (let index = 0; index < completedItems.length; index++) {
+    const item = completedItems[index];
+
+    // Add page break if needed (but not before first item)
+    if (!isFirstPage && yPosition > pageHeight - 80) {
+      doc.addPage();
+      yPosition = margin;
+    }
+
+    isFirstPage = false;
+
+    // ===== ITEM HEADER =====
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.5);
+    doc.line(margin, yPosition, pageWidth - margin, yPosition);
+    yPosition += 5;
+
+    doc.setTextColor(41, 128, 185);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(12);
+    doc.text(`Analysis ${index + 1}: ${item.name}`, margin, yPosition);
+    yPosition += 8;
+
+    // ===== ITEM METADATA =====
+    doc.setTextColor(0, 0, 0);
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(10);
+    doc.text('Details', margin, yPosition);
+    yPosition += 6;
+
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(9);
+    const itemMetadata = [
+      { label: 'Predicted Class', value: item.result.predicted_class },
+    ];
+
+    itemMetadata.forEach((meta) => {
+      doc.setFont(undefined, 'bold');
+      doc.text(`${meta.label}:`, margin + 5, yPosition);
+      doc.setFont(undefined, 'normal');
+      doc.text(meta.value, margin + 40, yPosition);
+      yPosition += 6;
+    });
+
+    yPosition += 2;
+
+    // ===== PROBABILITIES =====
+    if (item.result.probabilities) {
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(9);
+      doc.text('Probabilities', margin + 5, yPosition);
+      yPosition += 5;
+
+      doc.setFont(undefined, 'normal');
+      doc.setFontSize(8);
+
+      const probabilities = Object.entries(item.result.probabilities)
+        .sort((a, b) => b[1] - a[1]);
+
+      probabilities.forEach(([className, probability]) => {
+        const barLength = (probability * 30); // scale to ~30mm
+        const percentage = (probability * 100).toFixed(1);
+
+        doc.text(`${className}:`, margin + 7, yPosition);
+        doc.setDrawColor(200, 200, 200);
+        doc.rect(margin + 35, yPosition - 2.5, 30, 3);
+        doc.setFillColor(41, 128, 185);
+        doc.rect(margin + 35, yPosition - 2.5, barLength, 3, 'F');
+        doc.text(`${percentage}%`, margin + 68, yPosition);
+        yPosition += 5;
+      });
+
+      yPosition += 3;
+    }
+
+    // ===== ORIGINAL IMAGE =====
+    if (item.file && item.type.startsWith('image/')) {
+      if (yPosition + 50 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(9);
+      doc.text('Original Image', margin + 5, yPosition);
+      yPosition += 5;
+
+      try {
+        const imageData = await fileToDataURL(item.file);
+        const imgWidth = contentWidth - 10;
+        const imgHeight = (imgWidth * 3) / 4;
+
+        if (yPosition + imgHeight > pageHeight - margin - 5) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        doc.addImage(imageData, 'JPEG', margin + 5, yPosition, imgWidth, imgHeight);
+        yPosition += imgHeight + 5;
+      } catch (err) {
+        console.error('Error adding image:', err);
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(200, 0, 0);
+        doc.text('Image unavailable', margin + 7, yPosition);
+        yPosition += 5;
+      }
+    }
+
+    // ===== GRAD-CAM HEATMAP =====
+    if (item.result.grad_cam_image_base64) {
+      if (yPosition + 50 > pageHeight - margin) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFont(undefined, 'bold');
+      doc.setFontSize(9);
+      doc.text('Grad-CAM Heatmap', margin + 5, yPosition);
+      yPosition += 5;
+
+      try {
+        const heatmapData = `data:image/png;base64,${item.result.grad_cam_image_base64}`;
+        const imgWidth = contentWidth - 10;
+        const imgHeight = (imgWidth * 3) / 4;
+
+        if (yPosition + imgHeight > pageHeight - margin - 5) {
+          doc.addPage();
+          yPosition = margin;
+        }
+
+        doc.addImage(heatmapData, 'PNG', margin + 5, yPosition, imgWidth, imgHeight);
+        yPosition += imgHeight + 8;
+      } catch (err) {
+        console.error('Error adding heatmap:', err);
+        doc.setTextColor(200, 0, 0);
+        doc.text('Heatmap unavailable', margin + 7, yPosition);
+        yPosition += 5;
+      }
+    }
+
+    yPosition += 5;
+  }
+
+  // ===== FOOTER =====
+  const pageCount = doc.internal.pages.length - 1;
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    const footerY = pageHeight - 8;
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text('Generated by Industrial Defect Detector', pageWidth / 2, footerY - 3, {
+      align: 'center',
+    });
+    doc.text(`Page ${i} of ${pageCount}`, pageWidth / 2, footerY + 2, {
+      align: 'center',
+    });
+  }
+
+  // Save the combined PDF
+  const filename = `Batch_Defect_Analysis_${Date.now()}.pdf`;
+  doc.save(filename);
+};
